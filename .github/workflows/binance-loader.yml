@@ -26,5 +26,5 @@ jobs:
         run: |
           python binance_parser.py \
             --symbols "BTC,SOL,ETH,ARB,XRP,BNB,ADA,DOGE,UNI" \
-            --interval 1h \ 
+            --interval 1H \ 
             --mode FULL \
