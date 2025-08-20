@@ -27,4 +27,4 @@ jobs:
           python binance_parser.py \
             --symbols "BTC,ARB,ETH,SOL" \
             --interval 1h \
-            --mode FULL \
+            --mode RECENT_1H \
