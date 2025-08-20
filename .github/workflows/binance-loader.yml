@@ -25,6 +25,6 @@ jobs:
           PG_DSN: ${{ secrets.PG_DSN_CRYPTO }}        # <-- DSN from secrets
         run: |
           python binance_parser.py \
-            --symbols "BTC,INJ,ETH,SOL" \
+            --symbols "BTC,ARB,ETH,SOL" \
             --interval 1h \
-            --mode RECENT_1H \
+            --mode FULL \
