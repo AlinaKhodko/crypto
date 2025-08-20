@@ -2,7 +2,7 @@ name: Binance  Supabase Loader
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # every 15 minutes
+    - cron: "*/30 * * * *"   # every 15 minutes
   workflow_dispatch: {}
 
 jobs:
@@ -26,5 +26,5 @@ jobs:
         run: |
           python binance_parser.py \
             --symbols "BTC,ARB,ETH,SOL" \
-            --interval 1h \
+            --interval 30m \
             --mode RECENT_1H \
