@@ -12,7 +12,7 @@ from psycopg2.extras import execute_values
 # --------------------------
 # Configuration (env-driven)
 # --------------------------
-BINANCE_BASE_URL = os.getenv("BINANCE_BASE_URL", "https://api1.binance.com")
+BINANCE_BASE_URL = os.getenv("BINANCE_BASE_URL", "https://api.binance.us/api/v3/klines")
 USER_AGENT = os.getenv("USER_AGENT", "binance-history-loader/1.0")
 REQUEST_LIMIT = int(os.getenv("REQUEST_LIMIT", "1000"))
 SLEEP_BETWEEN_CALLS = float(os.getenv("SLEEP_BETWEEN_CALLS", "0.2"))
