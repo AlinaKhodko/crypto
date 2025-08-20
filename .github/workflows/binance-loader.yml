@@ -2,7 +2,7 @@ name: Binance  Supabase Loader
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # every 15 minutes
+    - cron: "*/200 * * * *"   # every 15 minutes
   workflow_dispatch: {}
 
 jobs:
@@ -22,9 +22,9 @@ jobs:
 
       - name: Run loader (RECENT_1H)
         env:
-          PG_DSN: ${{ secrets.PG_DSN_CRYPTO }}        # <-- DSN from secrets
+          PG_DSN: ${{ secrets.PG_DSN_CRYPTO }}        # <-- DSN from secrets, interval 2h, mode FULL
         run: |
           python binance_parser.py \
             --symbols "BTC,SOL,ETH,ARB,XRP,BNB,ADA,DOGE,UNI" \
-            --interval 15m \
-            --mode RECENT_1H \
+            --interval 2h \ 
+            --mode FULL \
