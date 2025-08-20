@@ -24,7 +24,7 @@ jobs:
         env:
           PG_DSN: ${{ secrets.PG_DSN_CRYPTO }}        # <-- DSN from secrets
         run: |
-          python binance_to_supabase.py \
+          python binance_parser.py \
             --symbols "BTC,INJ,ETH,SOL,XRP,ARB" \
             --interval 15m \
             --mode RECENT_1H \
