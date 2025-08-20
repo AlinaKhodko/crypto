@@ -203,7 +203,7 @@ def main():
             raise SystemExit("❌ Missing --dsn or PG_DSN environment variable")
 
         # Postgres (Supabase) connection (use the "Connection string" ending with ?sslmode=require)
-    PG_DSN = os.getenv("PG_DSN")
+    PG_DSN = os.getenv("PG_DSN_CRYPTO")
     if not PG_DSN:
         raise SystemExit("Missing PG_DSN env var (Supabase Postgres connection string).")
 
