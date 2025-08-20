@@ -185,7 +185,7 @@ def upsert_stock_price(conn, timeseries_id: int, hourly_df: pd.DataFrame):
 def date_range_for_mode(mode: str):
     now = utc_now()
     if mode == "FULL":
-        start_dt = datetime(2018,1,1, tzinfo=timezone.utc)
+        start_dt = datetime(2020,1,1, tzinfo=timezone.utc)
         end_dt = now
     elif mode == "RECENT_1H":
         # Fetch a small window (last 2 hours for safety) and it will roll into today's daily bucket
