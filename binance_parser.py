@@ -197,9 +197,13 @@ def date_range_for_mode(mode: str):
 
 def main():
     args = parse_args()
+
+    import os
+    print("PG_DSN_CRYPTO =", os.getenv("PG_DSN_CRYPTO"))
+
     # Postgres (Supabase) connection (use the "Connection string" ending with ?sslmode=require)
     PG_DSN = os.getenv("PG_DSN_CRYPTO")
-    
+
     if not PG_DSN:
         raise SystemExit("Missing PG_DSN env var (Supabase Postgres connection string).")
 
