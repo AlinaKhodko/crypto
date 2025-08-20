@@ -30,8 +30,6 @@ def parse_args():
     parser.add_argument("--mode", type=str, choices=["FULL","RECENT_1H"],
                         default=os.getenv("MODE", "FULL").upper(),
                         help="FULL = from 2010, RECENT_1H = last 1h (default: FULL)")
-    parser.add_argument("--dsn", type=str, default=os.getenv("PG_DSN"),
-                        help="Postgres DSN (default: from env PG_DSN)")
     return parser.parse_args()
 
 
@@ -199,11 +197,9 @@ def date_range_for_mode(mode: str):
 
 def main():
     args = parse_args()
-        if not args.dsn:
-            raise SystemExit("❌ Missing --dsn or PG_DSN environment variable")
-
-        # Postgres (Supabase) connection (use the "Connection string" ending with ?sslmode=require)
+    # Postgres (Supabase) connection (use the "Connection string" ending with ?sslmode=require)
     PG_DSN = os.getenv("PG_DSN_CRYPTO")
+    
     if not PG_DSN:
         raise SystemExit("Missing PG_DSN env var (Supabase Postgres connection string).")
 
