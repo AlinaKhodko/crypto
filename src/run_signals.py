@@ -69,7 +69,7 @@ def main():
                 # position of arg_start in the index (nearest <=)
                 pos = df_sym_0.index[df_sym_0["datetime"] <= arg_start].max()
                 lower = max(0, pos - window)
-                df_sym = df_sym_0.iloc[lower:pos+1].copy()
+                df_sym = df_sym_0.iloc[lower:].copy()
             else:
                 df_sym = df_sym_0.copy()
                     # index by datetime
