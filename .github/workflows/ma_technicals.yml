@@ -25,4 +25,4 @@ jobs:
 
       - name: Run calculation job
         run: |
-          python run_signals.py
+          python src/run_signals.py
