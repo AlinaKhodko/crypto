@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 
-from .config import ARG_START_DATE, END_DATE
+from .config import ARG_START_DATE, END_DATE, START_DATE_UPLOAD
 from .db import load_dataframes, insert_last_signal
 from .sabres import detect_ma_sabres, res_to_dfs
 from .supertrend import compute_supertrend, signals_from_supertrend
@@ -27,6 +27,7 @@ def main():
 
     arg_start = _ensure_utc(ARG_START_DATE) if ARG_START_DATE else None
     end_dt    = _ensure_utc(END_DATE)
+    end_dt    = _ensure_utc(END_DATE)
 
     # iterate ONE symbol at a time or all; here: all in table
     for sname in strategies["sname"].unique():
@@ -39,15 +40,10 @@ def main():
         # restrict to date range (for rolling simulation)
         df_sym["datetime"] = pd.to_datetime(df_sym["datetime"], utc=True)
         mask_period = (df_sym["datetime"] <= end_dt)
-        if arg_start is not None:
-            mask_period &= (df_sym["datetime"] >= arg_start)
-        df_sym = df_sym.loc[mask_period].copy()
-        if df_sym.empty: 
+        df_sym_0 = df_sym.loc[mask_period].copy()
+        if df_sym_0.empty: 
             continue
-
-        # index by datetime
-        df_sym = df_sym.set_index("datetime").sort_index()
-
+            
         # strategies for this symbol
         s_for_sym = strategies[strategies["sname"] == sname]
 
@@ -66,6 +62,12 @@ def main():
 
             # rolling window size: take the max driver (safe default)
             window = max(length_sell, length_buy, count_sell, count_buy, atr_period or 0)
+            if arg_start is not None:
+                mask_period = (df_sym_0["datetime"] >= arg_start)
+                df_sym = df_sym_0.loc[mask_period].copy()
+                    # index by datetime
+            df_sym = df_sym.set_index("datetime").sort_index()
+            
             if len(df_sym) <= window:
                 print(f"{sname}/{s}: not enough rows (need > {window}, have {len(df_sym)})")
                 continue
