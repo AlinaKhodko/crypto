@@ -27,4 +27,4 @@ jobs:
         env:
           PG_DSN: ${{ secrets.PG_DSN_CRYPTO }}        # <-- DSN from secret
         run: |
-          python src/run_signals.py
+          python -m src.run_signals
