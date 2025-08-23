@@ -19,6 +19,7 @@ def notify_telegram(datetime_, sname, operation, ma_level):
         op_display = "🔴 SELL 💥"
 
     msg = f"{op_display} {sname} {datetime_:%Y-%m-%d %H:%M} @ {ma_level}"
+    print(msg)
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
