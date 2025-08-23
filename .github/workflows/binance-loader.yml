@@ -2,7 +2,7 @@ name: Binance  Supabase Loader
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every 15 minutes
+    - cron: "*/60 * * * *"   # every 15 minutes
   workflow_dispatch: {}
 
 jobs:
