@@ -19,10 +19,31 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
+      name: Binance  Supabase Loader
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 15 minutes
+  workflow_dispatch: {}
+
+jobs:
+  recent-hour:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests pandas psycopg2-binary
 
+      - name: Run loader (RECENT_1H)
+        env:
+          PG_DSN: ${{ secrets.PG_DSN_CRYPTO }}        # <-- DSN from secret
       - name: Run calculation job
         run: |
           python src/run_signals.py
