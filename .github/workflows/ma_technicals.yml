@@ -2,7 +2,7 @@ name: MA Technicals
 
 on:
   schedule:
-    - cron: "40 * * * *"   # every 15 minutes
+    - cron: "*/60 * * * *"   # every 15 minutes
   workflow_dispatch: {}
   
 jobs:
