@@ -3,7 +3,7 @@ name: MA Technicals
 on:
   workflow_dispatch:   # manual trigger
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "32 * * * *"
 
 jobs:
   calc:
