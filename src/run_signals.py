@@ -61,7 +61,7 @@ def main():
             multiplier  = float(p.get("supertrend", {}).get("multiplier", 2.0)) if supertrend_enabled else None
 
             # rolling window size: take the max driver (safe default)
-            window = max(length_sell, length_buy, count_sell, count_buy, atr_period or 0)
+            window = max(length_sell, length_buy, count_sell, count_buy, atr_period or 0)+3
             if arg_start is not None:
                 # find arg_start in df_sym_0
                 df_sym_0 = df_sym_0.sort_values("datetime").reset_index(drop=True)
@@ -86,7 +86,7 @@ def main():
                 res = detect_ma_sabres(
                     subset,
                     ma_type=ma_type,
-                    length_buy=length_buy, count_buy=count_buy,
+                    length_buy=length_buy+1, count_buy=count_buy,
                     length_sell=length_sell, count_sell=count_sell
                 )
                 _, ma_signals = res_to_dfs(res, sname)
