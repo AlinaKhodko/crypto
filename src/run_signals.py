@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from .config import ARG_START_DATE, END_DATE, START_DATE_UPLOAD
 from .db import load_dataframes, insert_last_signal
 from .sabres import detect_ma_sabres, res_to_dfs
+from .telegram import notify_telegram
 from .supertrend import compute_supertrend, signals_from_supertrend
 
 def _ensure_utc(ts_like):
@@ -125,6 +126,7 @@ def main():
 
                 # insert that last signal
                 insert_last_signal(last.iloc[0])
+                notify_telegram(last['datetime'].iloc[0], last['sname'].iloc[0], last['ma_signal'].iloc[0], last['strategy'].iloc[0])
 
 if __name__ == "__main__":
     main()
