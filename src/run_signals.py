@@ -24,6 +24,7 @@ def _tg_escape_md2(text: str) -> str:
 
 def notify_telegram(datetime_, sname, operation, ma_level):
     if not (BOT_TOKEN and CHAT_ID):
+        print(2)
         return  # quietly skip if not configured
 
     if operation.upper() == "BUY":
