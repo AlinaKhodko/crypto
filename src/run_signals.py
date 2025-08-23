@@ -63,8 +63,15 @@ def main():
             # rolling window size: take the max driver (safe default)
             window = max(length_sell, length_buy, count_sell, count_buy, atr_period or 0)
             if arg_start is not None:
-                mask_period = (df_sym_0["datetime"] >= arg_start)
-                df_sym = df_sym_0.loc[mask_period].copy()
+                # find arg_start in df_sym_0
+                df_sym_0 = df_sym_0.sort_values("datetime").reset_index(drop=True)
+            
+                # position of arg_start in the index (nearest <=)
+                pos = df_sym_0.index[df_sym_0["datetime"] <= arg_start].max()
+                lower = max(0, pos - window)
+                df_sym = df_sym_0.iloc[lower:pos+1].copy()
+            else:
+                df_sym = df_sym_0.copy()
                     # index by datetime
             df_sym = df_sym.set_index("datetime").sort_index()
             
