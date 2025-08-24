@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 # Current UTC time
-now_utc = datetime.now(timezone.utc)
+now_utc = datetime.now(timezone.utc) + timedelta(hours=1)
 
 # 1h ago
 one_hour_ago = now_utc - timedelta(hours=1)
