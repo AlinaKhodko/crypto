@@ -3,10 +3,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 # Current UTC time
-now_utc = datetime.now(timezone.utc) + timedelta(hours=1)
-
-# 1h ago
-one_hour_ago = now_utc - timedelta(hours=1)
+now_utc = datetime.now(timezone.utc)
 
 # Date window for loading OHLC and iterating
 #ARG_START_DATE     = os.getenv("ARG_START_DATE", "2025-08-22 05:00:00")  # None for full history
