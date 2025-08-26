@@ -2,7 +2,7 @@ name: MA Technicals 5 min
 
 on:
   schedule:
-    - cron: "5 * * * *"   # every hour at minute 5
+    - cron: "0 */17 * * *"   # also “every hour on minute 0”
   workflow_dispatch: {}
   
 jobs:
