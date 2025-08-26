@@ -190,7 +190,7 @@ def date_range_for_mode(mode: str):
     elif mode == "RECENT_1H":
         # Fetch a small window (last 2 hours for safety) and it will roll into today's daily bucket
         end_dt = now
-        start_dt = now - timedelta(hours=2)
+        start_dt = now - timedelta(hours=1)
     else:
         raise ValueError("MODE must be FULL or RECENT_1H")
     return start_dt, end_dt
