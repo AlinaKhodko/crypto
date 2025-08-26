@@ -1,0 +1,30 @@
+name: Binance  Supabase Loader at 3 min
+
+on:
+  schedule:
+    - cron: "3 * * * *" # every hour at minute 3
+  workflow_dispatch: {}
+
+jobs:
+  recent-hour:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas psycopg2-binary
+
+      - name: Run loader (RECENT_1H)
+        env:
+          PG_DSN: ${{ secrets.PG_DSN_CRYPTO }}        # <-- DSN from secrets
+        run: |
+          python binance_parser.py \
+            --symbols "BTC,ARB,ETH,SOL" \
+            --interval 1h \
+            --mode RECENT_1H \
