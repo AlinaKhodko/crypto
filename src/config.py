@@ -8,7 +8,7 @@ now_utc = datetime.now(timezone.utc)
 # Date window for loading OHLC and iterating
 #ARG_START_DATE     = os.getenv("ARG_START_DATE", "2025-08-22 05:00:00")  # None for full history
 RAW_ARG_START_DATE    = os.getenv("ARG_START_DATE", now_utc.strftime("%Y-%m-%d %H:%M:%S"))
-START_DATE_UPLOAD  = os.getenv("START_DATE_UPLOAD", "2023-01-01 00:00:00")
+START_DATE_UPLOAD  = os.getenv("START_DATE_UPLOAD", "2025-08-01 00:00:00")
 #END_DATE           = os.getenv("END_DATE", "2025-08-22 10:00:00")
 RAW_END_DATE          = os.getenv("END_DATE", now_utc.strftime("%Y-%m-%d %H:%M:%S"))
 
