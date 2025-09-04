@@ -63,6 +63,6 @@ jobs:
         env:
           PG_DSN: ${{ secrets.PG_DSN_CRYPTO }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_GROUP_ID }}
         run: |
           python -m src.run_signals
