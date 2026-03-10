@@ -37,7 +37,15 @@ GitHub Actions (every 59 min)
 
 Separate MA periods (`length_buy`, `length_sell`) allow asymmetric sensitivity for entries vs exits.
 
-**Supertrend filter** (optional per strategy): if the MA issues a sell signal but Supertrend is bullish, the sell is suppressed.
+**Optional filters** (configured per strategy via JSON params):
+
+| Filter | What it does |
+|---|---|
+| Supertrend | Suppresses sell signals when Supertrend is bullish; optionally symmetric (also suppresses buys in downtrends) |
+| Slope magnitude | Requires the MA to have moved at least N × ATR over the count window — eliminates weak, flat reversals |
+| Volume confirmation | Signal bar volume must exceed a rolling average by a configurable multiplier |
+| ADX regime gate | Blocks all signals when ADX < threshold — keeps the strategy inactive in choppy, ranging markets |
+| Multi-timeframe alignment | Resamples 1h data to a higher timeframe (e.g. 4h), computes MA direction, and suppresses signals that trade against the HTF trend |
 
 ---
 
@@ -49,10 +57,11 @@ crypto/
 ├── src/
 │   ├── config.py              # Env-driven date range + DB config
 │   ├── db.py                  # SQL queries: load data, insert signals
-│   ├── indicators.py          # SMA, EMA, RMA, WMA, HMA, VWMA, DEMA, TEMA, ATR
-│   ├── sabres.py              # MA Sabres signal detection
+│   ├── indicators.py          # SMA, EMA, RMA, WMA, HMA, VWMA, DEMA, TEMA, ATR, ADX
+│   ├── sabres.py              # MA Sabres signal detection (slope, volume, ADX filters)
 │   ├── supertrend.py          # Supertrend indicator
-│   ├── run_signals.py         # Orchestration: load → compute → store → notify
+│   ├── run_signals.py         # Orchestration: load → compute → filter → store → notify
+│   ├── backtest.py            # Forward-return metrics: win rate, expectancy, Sharpe
 │   └── telegram.py            # Telegram bot notifications
 ├── instructions/
 │   ├── create_tables.sql      # DB schema
@@ -75,18 +84,61 @@ strategies          → per-symbol strategy configs (JSON params)
 strategies_signals  → computed buy/sell signals, unique (timeseries_id, strategy_id, datetime)
 ```
 
-Strategy params (stored as JSONB):
+Strategy params (stored as JSONB). All fields are optional — omitting any new param leaves existing behaviour unchanged.
 
-| Field                | Description                                    |
-|----------------------|------------------------------------------------|
-| `ma_type`            | MA algorithm: TEMA, EMA, HMA, VWMA, etc.      |
-| `length_buy`         | MA period for the buy signal MA                |
-| `count_buy`          | Bars MA must fall before a buy triggers        |
-| `length_sell`        | MA period for the sell signal MA               |
-| `count_sell`         | Bars MA must rise before a sell triggers       |
-| `supertrend_enabled` | Whether to apply Supertrend filter             |
-| `supertrend.atr_period` | ATR lookback for Supertrend                 |
-| `supertrend.multiplier` | ATR multiplier for Supertrend bands         |
+**Core**
+
+| Field                | Default | Description                                    |
+|----------------------|---------|------------------------------------------------|
+| `ma_type`            | `"TEMA"` | MA algorithm: TEMA, EMA, HMA, VWMA, etc.     |
+| `length_buy`         | —       | MA period for the buy signal MA                |
+| `count_buy`          | —       | Bars MA must fall before a buy triggers        |
+| `length_sell`        | —       | MA period for the sell signal MA               |
+| `count_sell`         | —       | Bars MA must rise before a sell triggers       |
+
+**Supertrend filter**
+
+| Field                      | Default | Description                                         |
+|----------------------------|---------|-----------------------------------------------------|
+| `supertrend_enabled`       | `false` | Apply Supertrend filter                             |
+| `supertrend.atr_period`    | `14`    | ATR lookback for Supertrend                         |
+| `supertrend.multiplier`    | `2.0`   | ATR multiplier for Supertrend bands                 |
+| `supertrend_symmetric`     | `false` | Also suppress buys when Supertrend is bearish       |
+
+**Signal quality filters**
+
+| Field             | Default | Description                                                      |
+|-------------------|---------|------------------------------------------------------------------|
+| `min_slope_mult`  | `0.0`   | Min avg MA slope as × ATR per bar (0 = off)                     |
+| `vol_lookback`    | `0`     | Volume MA lookback for confirmation (0 = off)                   |
+| `vol_mult`        | `1.0`   | Volume must be ≥ vol_mult × rolling volume average              |
+| `adx_threshold`   | `0.0`   | Min ADX to allow a signal — 25 is a typical trending threshold  |
+| `adx_length`      | `14`    | ADX lookback period                                             |
+
+**Multi-timeframe alignment**
+
+| Field           | Default  | Description                                          |
+|-----------------|----------|------------------------------------------------------|
+| `mtf_enabled`   | `false`  | Enable higher-timeframe trend filter                 |
+| `mtf_resample`  | `"4h"`   | Pandas resample rule for the higher timeframe        |
+| `mtf_ma_length` | `20`     | MA period on the higher timeframe                    |
+
+**Example strategy with all filters enabled:**
+
+```json
+{
+  "ma_type": "TEMA",
+  "length_buy": 60,  "count_buy": 30,
+  "length_sell": 120, "count_sell": 10,
+  "supertrend_enabled": true,
+  "supertrend": { "atr_period": 60, "multiplier": 2.0 },
+  "supertrend_symmetric": true,
+  "min_slope_mult": 0.05,
+  "vol_lookback": 20, "vol_mult": 1.2,
+  "adx_threshold": 25, "adx_length": 14,
+  "mtf_enabled": true, "mtf_resample": "4h", "mtf_ma_length": 20
+}
+```
 
 ---
 
@@ -145,6 +197,26 @@ python binance_parser.py --symbols "BTC,ETH,SOL,ARB" --interval 1h --mode RECENT
 python -m src.run_signals
 ```
 
+### 6. Run backtesting metrics
+
+After signals have been generated, evaluate their quality:
+
+```bash
+python -m src.backtest
+```
+
+Prints a table like:
+
+```
+Symbol       Strategy                               H     N    Win%  AvgW%  AvgL%   Exp%  Sharpe
+-------------------------------------------------------------------------------------------------
+BTCUSDT      MA Sabres (TEMA) — baseline           4h    42   54.8%  +1.23%  -0.91%  +0.26%   1.42
+BTCUSDT      MA Sabres (TEMA) — baseline           8h    42   57.1%  +1.87%  -1.12%  +0.59%   1.71
+...
+```
+
+Horizons evaluated: **4h**, **8h**, **24h** forward returns.
+
 ---
 
 ## GitHub Actions
@@ -179,63 +251,29 @@ Required GitHub Secrets:
 
 ---
 
-## Possible Improvements
-
-### Performance
-
-**1. Eliminate bar-by-bar rolling loop (biggest win)**
-`run_signals.py` re-runs `detect_ma_sabres` for every single candle in the selected window. Since the underlying logic in `sabres.py` is fully vectorized, the result changes only at the final bar. The loop could be replaced with a single call over the full dataset, checking only the last row for a signal. This would reduce compute time from O(N) indicator evaluations to O(1) per symbol/strategy.
-
-**2. Python `for` loop in `rma()` (indicators.py)**
-The `rma()` function in `indicators.py` uses a Python-level loop for Wilder's smoothing, which is slow on long series. `supertrend.py` already implements the same thing correctly using `series.ewm(alpha=1/length, adjust=False).mean()`. Both files should use the same vectorized implementation.
-
-**3. New DB engine created per signal**
-`insert_last_signal()` calls `get_engine()` on every invocation. SQLAlchemy engines are meant to be long-lived; creating one per call wastes connection overhead. A module-level engine or connection pool should be shared.
-
-### Correctness
-
-**4. Duplicate `end_dt` assignment (run_signals.py:30-31)**
-`end_dt = _ensure_utc(END_DATE)` is written twice on consecutive lines — dead code that should be removed.
-
-**5. Dead assignment overwritten immediately (run_signals.py:122-123)**
-```python
-last["sname"] = s       # set to strategy name
-last["sname"] = sname   # immediately overwritten with symbol name
-```
-The first line has no effect.
-
-**6. +1 hour offset applied unconditionally in config.py**
-Both `ARG_START_DATE` and `END_DATE` have a `+ timedelta(hours=1)` applied regardless of input. This workaround is not documented and will silently shift any date the caller provides.
-
-**7. `_tg_escape_md2` is defined but never called**
-The Telegram message is sent as plain text (no `parse_mode` set), but the escape helper exists as dead code. If MarkdownV2 formatting is ever added, the function also has a subtle bug: it doesn't escape `\` first, so backslashes inserted during earlier iterations get double-escaped in later ones.
-
-**8. FULL mode comment says "from 2010" but starts from 2020**
-`binance_parser.py` `date_range_for_mode()` sets `start_dt = datetime(2020,1,1, ...)` while the workflow comment says "from 2010".
+## Open Improvements
 
 ### Reliability & Observability
 
-**9. No structured logging**
+**No structured logging**
 All output uses bare `print()`. Replacing with Python's `logging` module would allow log levels (DEBUG/INFO/WARNING), timestamps, and easier filtering in GitHub Actions logs.
 
-**10. No signal deduplication check before computation**
+**No signal deduplication check before computation**
 The DB insert uses `ON CONFLICT DO NOTHING`, but the signal is still computed even if it already exists. A cheap `SELECT` before the heavy rolling computation would skip redundant work on re-runs.
 
-**11. No `src/__init__.py`**
+**No `src/__init__.py`**
 The `src/` package has no `__init__.py`. It works when invoked with `python -m src.run_signals` but would fail with certain import styles and linters.
-
-### Security
-
-**12. Real credentials in `.env.example`**
-The `.env.example` file contains an actual Supabase connection string including username and password. It should be replaced with placeholder values (e.g., `PG_DSN_CRYPTO=postgresql://user:password@host:5432/db`). Rotate the exposed credentials.
 
 ### Extensibility
 
-**13. Hardcoded symbol list in GitHub Actions**
+**Hardcoded symbol list in GitHub Actions**
 Symbols (`BTC,ETH,ARB,SOL`) are hardcoded in the workflow YAML. Making this a workflow input or a repository variable would let you add/remove symbols without editing the workflow file.
 
-**14. Strategy params have no schema validation**
+**Strategy params have no schema validation**
 Strategy params are raw JSONB with no enforcement. A missing key silently falls back to a default (e.g., `length_sell` defaults to 0), which can produce unexpected signals. Adding validation when a strategy is loaded would catch misconfiguration early.
 
-**15. Only Binance.US is supported by default**
-`BINANCE_BASE_URL` defaults to `https://api.binance.us`. Binance.US is geo-restricted. `https://api.binance.com` would give broader coverage; the URL could be swapped via the existing env var.
+**Only Binance.US is supported by default**
+`BINANCE_BASE_URL` defaults to `https://api.binance.us`. Binance.US is geo-restricted. `https://api.binance.com` would give broader coverage; the URL can be swapped via the existing env var.
+
+**+1 hour offset applied unconditionally in config.py**
+Both `ARG_START_DATE` and `END_DATE` have a `+ timedelta(hours=1)` applied regardless of input. This undocumented workaround silently shifts any date the caller provides.
