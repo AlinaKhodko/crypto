@@ -3,12 +3,6 @@ import os, requests
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
 
-def _tg_escape_md2(text: str) -> str:
-    # Escape MarkdownV2 reserved chars
-    for ch in r'_\*\[\]\(\)~`>#+-=|{}.!':
-        text = text.replace(ch, f"\\{ch}")
-    return text
-
 def notify_telegram(datetime_, sname, operation, ma_level):
     if not (BOT_TOKEN and CHAT_ID):
         return  # quietly skip if not configured

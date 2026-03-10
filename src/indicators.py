@@ -5,13 +5,7 @@ def sma(s, length): return s.rolling(length, min_periods=length).mean()
 def ema(s, length): return s.ewm(span=length, adjust=False).mean()
 
 def rma(s, length):
-    alpha = 1.0 / length
-    r = pd.Series(index=s.index, dtype=float)
-    seed = s.rolling(length, min_periods=length).mean()
-    r.iloc[:length] = seed.iloc[:length]
-    for i in range(length, len(s)):
-        r.iloc[i] = alpha * s.iloc[i] + (1 - alpha) * r.iloc[i-1]
-    return r
+    return s.ewm(alpha=1.0 / length, adjust=False).mean()
 
 def wma(s, length):
     w = np.arange(1, length + 1)

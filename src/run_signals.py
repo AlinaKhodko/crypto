@@ -28,7 +28,6 @@ def main():
 
     arg_start = _ensure_utc(ARG_START_DATE) if ARG_START_DATE else None
     end_dt    = _ensure_utc(END_DATE)
-    end_dt    = _ensure_utc(END_DATE)
 
     # iterate ONE symbol at a time or all; here: all in table
     for sname in strategies["sname"].unique():
@@ -80,53 +79,49 @@ def main():
                 print(f"{sname}/{s}: not enough rows (need > {window}, have {len(df_sym)})")
                 continue
 
-            # iterate each bar in the selected period
-            for current_time in df_sym.index[window:]:
-                subset = df_sym.loc[:current_time].tail(window).copy()
-                print(current_time)
-                res = detect_ma_sabres(
-                    subset,
-                    ma_type=ma_type,
-                    length_buy=length_buy+1, count_buy=count_buy,
-                    length_sell=length_sell, count_sell=count_sell
+            # run indicators once on the full working window
+            res = detect_ma_sabres(
+                df_sym,
+                ma_type=ma_type,
+                length_buy=length_buy+1, count_buy=count_buy,
+                length_sell=length_sell, count_sell=count_sell
+            )
+            _, ma_signals = res_to_dfs(res, sname)
+            if ma_signals.empty:
+                continue
+
+            ma_signals = ma_signals.set_index("datetime").sort_index()
+
+            # filter to signals at or after arg_start
+            if arg_start is not None:
+                ma_signals = ma_signals[ma_signals.index >= arg_start]
+            if ma_signals.empty:
+                continue
+
+            if supertrend_enabled:
+                st = compute_supertrend(df_sym, atr_period=atr_period, multiplier=multiplier, use_wilder_atr=True)
+                st_signal = signals_from_supertrend(st, sname)
+                summary = ma_signals.merge(st_signal[["side"]], left_index=True, right_index=True, how="left")
+                summary["ma_signal"] = np.where(
+                    (summary["ma_signal"] == "sell") & (summary["side"] == "buy"),
+                    np.nan,
+                    summary["ma_signal"]
                 )
-                _, ma_signals = res_to_dfs(res, sname)
-                if ma_signals.empty:
+            else:
+                summary = ma_signals[["ma_signal"]].copy()
+                summary["sname"] = sname
+
+            for dt, row in summary.iterrows():
+                if pd.isna(row["ma_signal"]):
                     continue
-                ma_signals = ma_signals.set_index("datetime").sort_index()
-
-                if supertrend_enabled:
-                    st = compute_supertrend(subset, atr_period=atr_period, multiplier=multiplier, use_wilder_atr=True)
-                    st_signal = signals_from_supertrend(st, sname).set_index(subset.index)
-                    # merge & rule: if MA says sell but ST says buy  NaN
-                    summary = ma_signals.merge(st_signal, left_index=True, right_index=True, how="outer")
-                    summary["ma_signal"] = np.where(
-                        (summary["ma_signal"] == "sell") & (summary["side"] == "buy"),
-                        np.nan,
-                        summary["ma_signal"]
-                    )
-                    
-                    last_row = summary.iloc[-1]
-                    #print(last_row)
-                else:
-                    summary = ma_signals.merge(subset, left_index=True, right_index=True, how="outer")
-                    summary = summary[['ma_signal','sname']]
-                    last_row = summary.iloc[-1]
-                    #print(last_row)
-
-                if pd.isna(last_row["ma_signal"]):
-                    continue
-
-                # prepare the last row only
-                last = summary.iloc[[-1]].copy()
-                last["sname"] = s
-                last["sname"] = sname                       # correct sname
-                last["strategy"] = s
-                last = last.reset_index().rename(columns={"index": "datetime"})
-
-                # insert that last signal
-                insert_last_signal(last.iloc[0])
-                notify_telegram(last['datetime'].iloc[0], last['sname'].iloc[0], last['ma_signal'].iloc[0], last['strategy'].iloc[0])
+                signal_row = pd.Series({
+                    "datetime": dt,
+                    "sname": sname,
+                    "strategy": s,
+                    "ma_signal": row["ma_signal"],
+                })
+                insert_last_signal(signal_row)
+                notify_telegram(dt, sname, row["ma_signal"], s)
 
 if __name__ == "__main__":
     main()

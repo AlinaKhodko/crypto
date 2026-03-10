@@ -2,8 +2,13 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from .config import PG_DSN, START_DATE_UPLOAD, END_DATE
 
+_engine = None
+
 def get_engine():
-    return create_engine(PG_DSN, pool_pre_ping=True)
+    global _engine
+    if _engine is None:
+        _engine = create_engine(PG_DSN, pool_pre_ping=True)
+    return _engine
 
 def load_dataframes(start: str = START_DATE_UPLOAD, end: str = END_DATE):
     eng = get_engine()
