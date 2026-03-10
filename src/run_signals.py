@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from .config import ARG_START_DATE, END_DATE, START_DATE_UPLOAD
 from .db import load_dataframes, insert_last_signal
+from .indicators import ma_series
 from .sabres import detect_ma_sabres, res_to_dfs
 from .supertrend import compute_supertrend, signals_from_supertrend
 from .telegram import notify_telegram
@@ -56,9 +57,18 @@ def main():
             count_sell  = int(p.get("count_sell", 0))
             count_buy   = int(p.get("count_buy", 0))
             ma_type     = p.get("ma_type", "TEMA")
-            supertrend_enabled = bool(p.get("supertrend_enabled", False))
-            atr_period  = int(p.get("supertrend", {}).get("atr_period", 14)) if supertrend_enabled else None
-            multiplier  = float(p.get("supertrend", {}).get("multiplier", 2.0)) if supertrend_enabled else None
+            supertrend_enabled   = bool(p.get("supertrend_enabled", False))
+            atr_period           = int(p.get("supertrend", {}).get("atr_period", 14)) if supertrend_enabled else None
+            multiplier           = float(p.get("supertrend", {}).get("multiplier", 2.0)) if supertrend_enabled else None
+            supertrend_symmetric = bool(p.get("supertrend_symmetric", False))
+            min_slope_mult       = float(p.get("min_slope_mult", 0.0))
+            vol_lookback         = int(p.get("vol_lookback", 0))
+            vol_mult             = float(p.get("vol_mult", 1.0))
+            adx_threshold        = float(p.get("adx_threshold", 0.0))
+            adx_length           = int(p.get("adx_length", 14))
+            mtf_enabled          = bool(p.get("mtf_enabled", False))
+            mtf_resample         = p.get("mtf_resample", "4h")
+            mtf_ma_length        = int(p.get("mtf_ma_length", 20))
 
             # rolling window size: take the max driver (safe default)
             window = max(length_sell, length_buy, count_sell, count_buy, atr_period or 0)+3
@@ -84,7 +94,10 @@ def main():
                 df_sym,
                 ma_type=ma_type,
                 length_buy=length_buy+1, count_buy=count_buy,
-                length_sell=length_sell, count_sell=count_sell
+                length_sell=length_sell, count_sell=count_sell,
+                min_slope_mult=min_slope_mult,
+                vol_lookback=vol_lookback, vol_mult=vol_mult,
+                adx_threshold=adx_threshold, adx_length=adx_length,
             )
             _, ma_signals = res_to_dfs(res, sname)
             if ma_signals.empty:
@@ -102,14 +115,27 @@ def main():
                 st = compute_supertrend(df_sym, atr_period=atr_period, multiplier=multiplier, use_wilder_atr=True)
                 st_signal = signals_from_supertrend(st, sname)
                 summary = ma_signals.merge(st_signal[["side"]], left_index=True, right_index=True, how="left")
-                summary["ma_signal"] = np.where(
-                    (summary["ma_signal"] == "sell") & (summary["side"] == "buy"),
-                    np.nan,
-                    summary["ma_signal"]
-                )
+                suppress = (summary["ma_signal"] == "sell") & (summary["side"] == "buy")
+                if supertrend_symmetric:
+                    suppress = suppress | ((summary["ma_signal"] == "buy") & (summary["side"] == "sell"))
+                summary["ma_signal"] = np.where(suppress, np.nan, summary["ma_signal"])
             else:
                 summary = ma_signals[["ma_signal"]].copy()
                 summary["sname"] = sname
+
+            if mtf_enabled:
+                df_htf = df_sym.resample(mtf_resample).agg({
+                    "open": "first", "high": "max", "low": "min",
+                    "value": "last", "volume": "sum"
+                }).dropna(subset=["value"])
+                htf_ma = ma_series(df_htf, ma_type, mtf_ma_length)
+                htf_up = (htf_ma > htf_ma.shift(1)).reindex(summary.index, method="ffill")
+                summary["ma_signal"] = np.where(
+                    ((summary["ma_signal"] == "buy")  & (~htf_up.fillna(False))) |
+                    ((summary["ma_signal"] == "sell") & ( htf_up.fillna(True))),
+                    np.nan,
+                    summary["ma_signal"]
+                )
 
             for dt, row in summary.iterrows():
                 if pd.isna(row["ma_signal"]):

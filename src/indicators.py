@@ -60,3 +60,17 @@ def series_rising(s, n):
     cond = d > 0
     return cond.rolling(n).apply(lambda x: 1.0 if np.all(x) else 0.0, raw=True).astype(bool)
 
+def adx(df, length=14):
+    high, low, close = df["high"], df["low"], df["value"]
+    up_move   = high - high.shift(1)
+    down_move = low.shift(1) - low
+    dm_plus  = pd.Series(np.where((up_move > down_move)  & (up_move > 0),   up_move,   0.0), index=df.index)
+    dm_minus = pd.Series(np.where((down_move > up_move)  & (down_move > 0), down_move, 0.0), index=df.index)
+    prev_close = close.shift(1)
+    tr = pd.concat([(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    atr_s    = rma(tr, length)
+    di_plus  = 100 * rma(dm_plus,  length) / atr_s
+    di_minus = 100 * rma(dm_minus, length) / atr_s
+    dx = 100 * (di_plus - di_minus).abs() / (di_plus + di_minus).replace(0, np.nan)
+    return rma(dx.fillna(0), length)
+
