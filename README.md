@@ -1,51 +1,32 @@
 # Crypto MA Signals
 
-Automated hourly pipeline that fetches OHLCV data from Binance, computes **MA Sabres** and **Supertrend** signals, persists them to a PostgreSQL database (Supabase), and pushes buy/sell alerts to a Telegram channel.
+An automated hourly pipeline that fetches OHLCV data from Binance, runs technical analysis to detect buy/sell signals, persists them to a PostgreSQL database (Supabase), and sends alerts to a Telegram channel.
 
 ---
 
 ## How It Works
 
 ```
-GitHub Actions (every 59 min)
-        │
-        ▼
-┌─────────────────┐        ┌─────────────────────────────┐
-│ binance_parser  │──────▶│ ohlc table (Supabase/PG)    │
-│ (RECENT_1H mode)│        └────────────┬────────────────┘
-└─────────────────┘                     │
-                                        ▼
-                           ┌────────────────────────────┐
-                           │  src/run_signals.py        │
-                           │  • loads OHLC + strategies │
-                           │  • runs MA Sabres logic    │
-                           │  • optional Supertrend     │
-                           │    filter                  │
-                           └────────┬───────────────────┘
-                                    │
-                    ┌───────────────┴──────────────┐
-                    ▼                              ▼
-         strategies_signals table         Telegram notification
+Every 59 minutes on GitHub Actions:
+
+  Job 1: binance_parser.py
+  ┌─────────────────────────────────────────────────┐
+  │ Binance API → fetch last 1h candle              │
+  │ for BTC, ETH, ARB, SOL                          │
+  │ → upsert into ohlc table (Supabase/PG)          │
+  └─────────────────────────────────────────────────┘
+                          ↓
+  Job 2: src/run_signals.py
+  ┌─────────────────────────────────────────────────┐
+  │ Load OHLCV + strategy configs from DB           │
+  │ → run MA Sabres signal detection                │
+  │ → apply optional filters                        │
+  │ → insert signals into strategies_signals        │
+  │ → send Telegram alert                           │
+  └─────────────────────────────────────────────────┘
 ```
 
-### Signal Logic
-
-**MA Sabres** — detects when a moving average reverses direction after a sustained trend:
-
-- **Buy**: MA was falling for `count_buy` consecutive bars → starts rising
-- **Sell**: MA was rising for `count_sell` consecutive bars → starts falling
-
-Separate MA periods (`length_buy`, `length_sell`) allow asymmetric sensitivity for entries vs exits.
-
-**Optional filters** (configured per strategy via JSON params):
-
-| Filter | What it does |
-|---|---|
-| Supertrend | Suppresses sell signals when Supertrend is bullish; optionally symmetric (also suppresses buys in downtrends) |
-| Slope magnitude | Requires the MA to have moved at least N × ATR over the count window — eliminates weak, flat reversals |
-| Volume confirmation | Signal bar volume must exceed a rolling average by a configurable multiplier |
-| ADX regime gate | Blocks all signals when ADX < threshold — keeps the strategy inactive in choppy, ranging markets |
-| Multi-timeframe alignment | Resamples 1h data to a higher timeframe (e.g. 4h), computes MA direction, and suppresses signals that trade against the HTF trend |
+Job 2 waits for Job 1 to finish so the new candle is in the DB before signals are computed.
 
 ---
 
@@ -75,60 +56,244 @@ crypto/
 
 ---
 
-## Database Schema
+## Database
+
+Four tables, each with a clear role.
+
+**`timeseries`** — registry of every symbol being tracked
 
 ```
-timeseries          → registry of symbols (sname = e.g. "BTCUSDT")
-ohlc                → OHLCV rows, unique (timeseries_id, datetime)
-strategies          → per-symbol strategy configs (JSON params)
-strategies_signals  → computed buy/sell signals, unique (timeseries_id, strategy_id, datetime)
+id | sname    | lname    | ...
+1  | BTCUSDT  | Bitcoin  | ...
+2  | ETHUSDT  | Ethereum | ...
 ```
 
-Strategy params (stored as JSONB). All fields are optional — omitting any new param leaves existing behaviour unchanged.
+**`ohlc`** — raw price data, one row per candle
 
-**Core**
+```
+timeseries_id | datetime             | value   | open    | high    | low     | volume
+1             | 2026-03-11 10:00:00  | 82000.0 | 81500.0 | 82300.0 | 81200.0 | 1234.5
+```
 
-| Field                | Default | Description                                    |
-|----------------------|---------|------------------------------------------------|
-| `ma_type`            | `"TEMA"` | MA algorithm: TEMA, EMA, HMA, VWMA, etc.     |
-| `length_buy`         | —       | MA period for the buy signal MA                |
-| `count_buy`          | —       | Bars MA must fall before a buy triggers        |
-| `length_sell`        | —       | MA period for the sell signal MA               |
-| `count_sell`         | —       | Bars MA must rise before a sell triggers       |
+`value` = close price. Unique constraint on `(timeseries_id, datetime)` makes upserts safe and idempotent.
 
-**Supertrend filter**
+**`strategies`** — per-symbol strategy configurations stored as JSONB
 
-| Field                      | Default | Description                                         |
-|----------------------------|---------|-----------------------------------------------------|
-| `supertrend_enabled`       | `false` | Apply Supertrend filter                             |
-| `supertrend.atr_period`    | `14`    | ATR lookback for Supertrend                         |
-| `supertrend.multiplier`    | `2.0`   | ATR multiplier for Supertrend bands                 |
-| `supertrend_symmetric`     | `false` | Also suppress buys when Supertrend is bearish       |
+```
+timeseries_id | name                           | params (JSONB)
+1             | MA Sabres (TEMA) — baseline    | {"length_buy": 60, ...}
+1             | MA Sabres (TEMA) + Supertrend  | {"length_buy": 60, "supertrend_enabled": true, ...}
+```
 
-**Signal quality filters**
+Each symbol can have multiple independent strategies.
 
-| Field             | Default | Description                                                      |
-|-------------------|---------|------------------------------------------------------------------|
-| `min_slope_mult`  | `0.0`   | Min avg MA slope as × ATR per bar (0 = off)                     |
-| `vol_lookback`    | `0`     | Volume MA lookback for confirmation (0 = off)                   |
-| `vol_mult`        | `1.0`   | Volume must be ≥ vol_mult × rolling volume average              |
-| `adx_threshold`   | `0.0`   | Min ADX to allow a signal — 25 is a typical trending threshold  |
-| `adx_length`      | `14`    | ADX lookback period                                             |
+**`strategies_signals`** — the output: every detected buy/sell signal
 
-**Multi-timeframe alignment**
+```
+timeseries_id | strategy_id | datetime             | signal
+1             | 1           | 2026-03-10 14:00:00  | buy
+1             | 2           | 2026-03-09 08:00:00  | sell
+```
 
-| Field           | Default  | Description                                          |
-|-----------------|----------|------------------------------------------------------|
-| `mtf_enabled`   | `false`  | Enable higher-timeframe trend filter                 |
-| `mtf_resample`  | `"4h"`   | Pandas resample rule for the higher timeframe        |
-| `mtf_ma_length` | `20`     | MA period on the higher timeframe                    |
+Unique on `(timeseries_id, strategy_id, datetime)` — the same signal is never inserted twice.
 
-**Example strategy with all filters enabled:**
+---
+
+## Data Ingestion (`binance_parser.py`)
+
+Fetches OHLCV candles from `api.binance.us` and writes them to the `ohlc` table.
+
+**Two modes:**
+- `FULL` — loads everything from 2020-01-01 to now (used for initial backfill)
+- `RECENT_1H` — loads only the last 1 hour (used every 59 minutes in production)
+
+**Pagination:** Each API call fetches up to 1000 candles. The script tracks the last `close_time` and advances the cursor until it reaches the end of the requested range.
+
+**Reliability:** Retries with exponential backoff on failures or rate limits (HTTP 429). Uses `ON CONFLICT DO UPDATE` — so every run is idempotent; re-running never creates duplicate data.
+
+---
+
+## Signal Computation (`src/run_signals.py`)
+
+The orchestrator. For each symbol × strategy combination:
+
+```
+1. Load all OHLCV rows for the symbol (filtered to date window)
+2. Trim to a working window starting just before arg_start
+   (gives the MA enough bars to warm up without processing all history)
+3. Call detect_ma_sabres() once → get all signals in the window
+4. Filter signals to only those at or after arg_start
+5. Apply Supertrend filter (if enabled)
+6. Apply multi-timeframe alignment filter (if enabled)
+7. For each remaining signal → insert to DB + send Telegram
+```
+
+**Why `arg_start`?**
+In production, `ARG_START_DATE` is approximately now. The pipeline only processes the current hour's signal, not the entire history. Combined with `ON CONFLICT DO NOTHING`, re-runs are always safe.
+
+---
+
+## The Core Math: MA Sabres (`src/sabres.py`)
+
+**Concept:** A moving average that has been trending in one direction for a sustained period has built-up momentum. When it reverses, that's a meaningful signal.
+
+**Buy signal:**
+1. Compute a moving average with period `length_buy`
+2. Check if that MA has been **falling** for every one of the last `count_buy` bars
+3. If yes, and the MA is now **rising** → **buy**
+
+**Sell signal:**
+1. Compute a moving average with period `length_sell`
+2. Check if that MA has been **rising** for every one of the last `count_sell` bars
+3. If yes, and the MA is now **falling** → **sell**
+
+Buy and sell use **separate MAs** with independent periods — entries and exits can have different sensitivities. For example, using a shorter MA for buys and a longer one for sells reflects that crypto rallies tend to be slower and more sustained while reversals are sharper.
+
+**The signal fires exactly once** — on the first bar of the reversal. Once the MA is rising, the "was falling" condition becomes false, so no duplicate signals on consecutive bars.
+
+**In code:**
+```python
+fl = series_falling(ma_buy, count_buy)     # True where MA fell for count_buy consecutive bars
+rs = series_rising(ma_sell, count_sell)    # True where MA rose for count_sell consecutive bars
+
+up_cond = fl.shift(1) & (ma_buy > ma_buy.shift(1))    # was falling, now rising → buy
+dn_cond = rs.shift(1) & (ma_sell < ma_sell.shift(1))  # was rising, now falling → sell
+```
+
+---
+
+## Moving Averages (`src/indicators.py`)
+
+All computed on the `value` (close price) column:
+
+| Type | Formula | Character |
+|---|---|---|
+| `SMA` | Rolling mean | Slow, stable |
+| `EMA` | Exponential with `span=length` | Faster than SMA |
+| `RMA` / `SMMA` | Wilder's MA: `ewm(alpha=1/length)` | Very smooth, used for ATR |
+| `WMA` | Linearly weighted (recent bars weighted more) | Faster than SMA |
+| `HMA` / `HULLMA` | `WMA(2×WMA(n/2) − WMA(n), √n)` | Very low lag |
+| `VWMA` | Price × volume weighted mean | Volume-aware |
+| `DEMA` | `2×EMA − EMA(EMA)` | Reduced lag vs EMA |
+| `TEMA` | `3×EMA − 3×EMA(EMA) + EMA(EMA(EMA))` | Minimal lag (default) |
+
+**ATR (Average True Range):**
+```
+True Range  = max(high − low, |high − prev_close|, |low − prev_close|)
+ATR         = RMA(True Range, length)
+```
+Measures volatility. Used to scale signal quality filters.
+
+**ADX (Average Directional Index):**
+```
++DM  = max(high − prev_high, 0)  when > −DM, else 0
+−DM  = max(prev_low − low, 0)    when > +DM, else 0
++DI  = 100 × RMA(+DM) / ATR
+−DI  = 100 × RMA(−DM) / ATR
+DX   = 100 × |+DI − −DI| / (+DI + −DI)
+ADX  = RMA(DX)
+```
+Measures trend **strength** (not direction). Below ~20 = ranging market. Above 25 = trending market. Used to gate signals.
+
+---
+
+## Supertrend (`src/supertrend.py`)
+
+A trend-following indicator that uses ATR to compute dynamic support/resistance bands:
+
+```
+Source      = (open + high + low + close) / 4
+Upper band  = source + multiplier × ATR    ← resistance in downtrend
+Lower band  = source − multiplier × ATR    ← support in uptrend
+```
+
+The bands **ratchet** — the lower band can only move up (never down) in a bullish trend, and vice versa. This prevents the indicator from flipping on small pullbacks.
+
+**Trend state:**
+- `+1` (bullish) when price is above the lower band
+- `−1` (bearish) when price is below the upper band
+
+**As a filter:** The Supertrend side is looked up at the exact datetime of each MA Sabres signal. A sell signal that occurs while Supertrend is bullish is suppressed — you don't want to exit a strong uptrend on a minor MA wobble.
+
+---
+
+## Optional Filters
+
+All filters are opt-in via strategy JSON params. Defaults leave the original behaviour untouched.
+
+### Supertrend filter
+
+| Param | Default | Description |
+|---|---|---|
+| `supertrend_enabled` | `false` | Enable Supertrend filter |
+| `supertrend.atr_period` | `14` | ATR lookback |
+| `supertrend.multiplier` | `2.0` | ATR multiplier for bands |
+| `supertrend_symmetric` | `false` | Also suppress buys when Supertrend is bearish |
+
+### Slope magnitude filter
+
+```
+avg_slope = |MA[t] − MA[t − count]| / count
+threshold = ATR × min_slope_mult
+Signal only fires if avg_slope >= threshold
+```
+
+Prevents weak, barely-moving MAs from triggering. `min_slope_mult=0.05` means the MA must move at least 5% of ATR per bar on average.
+
+| Param | Default | Description |
+|---|---|---|
+| `min_slope_mult` | `0.0` | Min avg MA slope as × ATR per bar (0 = off) |
+
+### Volume confirmation
+
+```
+vol_MA = rolling_mean(volume, vol_lookback)
+Signal only fires if volume[t] >= vol_MA × vol_mult
+```
+
+Requires meaningful participation at the signal bar. A reversal on thin volume is less reliable.
+
+| Param | Default | Description |
+|---|---|---|
+| `vol_lookback` | `0` | Volume MA lookback (0 = off) |
+| `vol_mult` | `1.0` | Volume must be ≥ vol_mult × vol MA |
+
+### ADX regime gate
+
+```
+Signal only fires if ADX >= adx_threshold
+```
+
+Turns the strategy off in sideways/choppy markets where MA reversals are noise. Typical value: 25.
+
+| Param | Default | Description |
+|---|---|---|
+| `adx_threshold` | `0.0` | Min ADX to allow a signal (0 = off) |
+| `adx_length` | `14` | ADX lookback period |
+
+### Multi-timeframe alignment
+
+```
+Resample 1h OHLCV → higher timeframe (e.g. 4h)
+Compute MA on 4h data, forward-fill direction to 1h
+Buy suppressed  if 4h MA is falling
+Sell suppressed if 4h MA is rising
+```
+
+Ensures 1h signals are trading with the larger trend.
+
+| Param | Default | Description |
+|---|---|---|
+| `mtf_enabled` | `false` | Enable higher-timeframe filter |
+| `mtf_resample` | `"4h"` | Pandas resample rule |
+| `mtf_ma_length` | `20` | MA period on the higher timeframe |
+
+### Full example strategy
 
 ```json
 {
   "ma_type": "TEMA",
-  "length_buy": 60,  "count_buy": 30,
+  "length_buy": 60,   "count_buy": 30,
   "length_sell": 120, "count_sell": 10,
   "supertrend_enabled": true,
   "supertrend": { "atr_period": 60, "multiplier": 2.0 },
@@ -139,6 +304,81 @@ Strategy params (stored as JSONB). All fields are optional — omitting any new 
   "mtf_enabled": true, "mtf_resample": "4h", "mtf_ma_length": 20
 }
 ```
+
+---
+
+## Backtesting (`src/backtest.py`)
+
+Measures whether historical signals actually made money.
+
+**How it works:**
+For each signal, the entry price is the close at the signal bar. The exit price is the close N hours later. Returns are sign-adjusted for direction (buy profits when price rises; sell profits when price falls).
+
+**Metrics per forward-return horizon (4h, 8h, 24h):**
+
+| Metric | Formula |
+|---|---|
+| Win rate | % of trades with positive return |
+| Avg win | Mean return of winning trades |
+| Avg loss | Mean return of losing trades |
+| Expectancy | `win_rate × avg_win + loss_rate × avg_loss` |
+| Sharpe | `mean(returns) / std(returns) × √(8760 / H)` annualised |
+
+Run it after signals have been generated:
+
+```bash
+python -m src.backtest
+```
+
+Output:
+```
+Symbol       Strategy                               H     N    Win%  AvgW%  AvgL%   Exp%  Sharpe
+-------------------------------------------------------------------------------------------------
+BTCUSDT      MA Sabres (TEMA) — baseline           4h    42   54.8%  +1.23%  -0.91%  +0.26%   1.42
+BTCUSDT      MA Sabres (TEMA) — baseline           8h    42   57.1%  +1.87%  -1.12%  +0.59%   1.71
+...
+```
+
+---
+
+## Alerts (`src/telegram.py`)
+
+When a signal is generated, a message is sent to a Telegram chat:
+
+```
+🟢 BUY 🚀 BTCUSDT 2026-03-11 10:00 @ 82000.0
+🔴 SELL 💥 ETHUSDT 2026-03-11 09:00 @ 3200.0
+```
+
+If `TELEGRAM_BOT_TOKEN` or `TELEGRAM_CHAT_ID` are not set, this silently does nothing — the pipeline continues normally.
+
+---
+
+## GitHub Actions
+
+The workflow (`.github/workflows/ma_technicals.yml`) runs every 59 minutes (not 60 — GitHub's scheduler drifts, so 59 avoids accumulating offset).
+
+**Two sequential jobs:**
+
+```
+Job 1: recent-hour (Python 3.11)
+  pip install requests pandas psycopg2-binary
+  python binance_parser.py --symbols "BTC,ETH,ARB,SOL" --interval 1h --mode RECENT_1H
+
+         ↓ (needs: recent-hour)
+
+Job 2: calc (Python 3.12)
+  pip install -r requirements.txt
+  python -m src.run_signals
+```
+
+Required GitHub Secrets:
+
+| Secret | Maps to env var |
+|---|---|
+| `PG_DSN_CRYPTO` | `PG_DSN` |
+| `TELEGRAM_BOT_TOKEN` | `TELEGRAM_BOT_TOKEN` |
+| `TELEGRAM_GROUP_ID` | `TELEGRAM_CHAT_ID` |
 
 ---
 
@@ -154,30 +394,23 @@ pip install -r requirements.txt
 
 ### 2. Configure environment variables
 
-Copy `.env.example` to `.env` and fill in your values:
-
 ```bash
 cp .env.example .env
 ```
 
-| Variable             | Description                                      |
-|----------------------|--------------------------------------------------|
-| `PG_DSN_CRYPTO`      | PostgreSQL connection string (Supabase or other) |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token (optional)                    |
-| `TELEGRAM_CHAT_ID`   | Telegram chat/group ID (optional)                |
-| `ARG_START_DATE`     | Start of signal computation window (UTC)         |
-| `END_DATE`           | End of signal computation window (UTC)           |
-| `START_DATE_UPLOAD`  | Earliest OHLCV date to load from DB              |
+| Variable | Description |
+|---|---|
+| `PG_DSN_CRYPTO` | PostgreSQL connection string (Supabase or other) |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token (optional) |
+| `TELEGRAM_CHAT_ID` | Telegram chat/group ID (optional) |
+| `ARG_START_DATE` | Start of signal computation window (UTC) |
+| `END_DATE` | End of signal computation window (UTC) |
+| `START_DATE_UPLOAD` | Earliest OHLCV date to load from DB |
 
-### 3. Initialize the database
-
-Run the SQL scripts in order:
+### 3. Initialise the database
 
 ```sql
--- 1. Create tables
 \i instructions/create_tables.sql
-
--- 2. Seed symbols and strategies
 \i instructions/inserts.sql
 ```
 
@@ -197,83 +430,26 @@ python binance_parser.py --symbols "BTC,ETH,SOL,ARB" --interval 1h --mode RECENT
 python -m src.run_signals
 ```
 
-### 6. Run backtesting metrics
-
-After signals have been generated, evaluate their quality:
+### 6. Evaluate signal quality
 
 ```bash
 python -m src.backtest
 ```
 
-Prints a table like:
-
-```
-Symbol       Strategy                               H     N    Win%  AvgW%  AvgL%   Exp%  Sharpe
--------------------------------------------------------------------------------------------------
-BTCUSDT      MA Sabres (TEMA) — baseline           4h    42   54.8%  +1.23%  -0.91%  +0.26%   1.42
-BTCUSDT      MA Sabres (TEMA) — baseline           8h    42   57.1%  +1.87%  -1.12%  +0.59%   1.71
-...
-```
-
-Horizons evaluated: **4h**, **8h**, **24h** forward returns.
-
----
-
-## GitHub Actions
-
-The workflow (`.github/workflows/ma_technicals.yml`) runs automatically every 59 minutes:
-
-1. **`recent-hour`** job: fetches last hour of OHLCV for BTC, ETH, ARB, SOL from Binance
-2. **`calc`** job: runs `src.run_signals`, inserts signals, sends Telegram alerts
-
-Required GitHub Secrets:
-
-| Secret                | Maps to env var        |
-|-----------------------|------------------------|
-| `PG_DSN_CRYPTO`       | `PG_DSN`               |
-| `TELEGRAM_BOT_TOKEN`  | `TELEGRAM_BOT_TOKEN`   |
-| `TELEGRAM_GROUP_ID`   | `TELEGRAM_CHAT_ID`     |
-
----
-
-## Supported Moving Averages
-
-| Type       | Description                         |
-|------------|-------------------------------------|
-| `SMA`      | Simple Moving Average               |
-| `EMA`      | Exponential Moving Average          |
-| `RMA`/`SMMA` | Wilder's Smoothed MA              |
-| `WMA`      | Weighted Moving Average             |
-| `HMA`/`HULLMA` | Hull Moving Average             |
-| `VWMA`     | Volume-Weighted Moving Average      |
-| `DEMA`     | Double EMA                          |
-| `TEMA`     | Triple EMA (default)                |
-
 ---
 
 ## Open Improvements
 
-### Reliability & Observability
+**No structured logging** — bare `print()` throughout. Replacing with Python's `logging` module would add log levels, timestamps, and easier filtering in GitHub Actions.
 
-**No structured logging**
-All output uses bare `print()`. Replacing with Python's `logging` module would allow log levels (DEBUG/INFO/WARNING), timestamps, and easier filtering in GitHub Actions logs.
+**No pre-computation deduplication check** — signals are computed even if they already exist in the DB. A cheap `SELECT` before heavy indicator computation would skip redundant work on re-runs.
 
-**No signal deduplication check before computation**
-The DB insert uses `ON CONFLICT DO NOTHING`, but the signal is still computed even if it already exists. A cheap `SELECT` before the heavy rolling computation would skip redundant work on re-runs.
+**No `src/__init__.py`** — the package works with `python -m src.run_signals` but would fail with certain import styles and linters.
 
-**No `src/__init__.py`**
-The `src/` package has no `__init__.py`. It works when invoked with `python -m src.run_signals` but would fail with certain import styles and linters.
+**Hardcoded symbol list in workflow YAML** — adding/removing symbols requires editing the file. A repository variable or workflow input would be cleaner.
 
-### Extensibility
+**No strategy param schema validation** — a missing key silently falls back to a default (e.g. `length_sell=0`), which can produce unexpected signals.
 
-**Hardcoded symbol list in GitHub Actions**
-Symbols (`BTC,ETH,ARB,SOL`) are hardcoded in the workflow YAML. Making this a workflow input or a repository variable would let you add/remove symbols without editing the workflow file.
+**Only Binance.US by default** — `BINANCE_BASE_URL` defaults to `api.binance.us` which is geo-restricted. Can be overridden via env var to use `api.binance.com`.
 
-**Strategy params have no schema validation**
-Strategy params are raw JSONB with no enforcement. A missing key silently falls back to a default (e.g., `length_sell` defaults to 0), which can produce unexpected signals. Adding validation when a strategy is loaded would catch misconfiguration early.
-
-**Only Binance.US is supported by default**
-`BINANCE_BASE_URL` defaults to `https://api.binance.us`. Binance.US is geo-restricted. `https://api.binance.com` would give broader coverage; the URL can be swapped via the existing env var.
-
-**+1 hour offset applied unconditionally in config.py**
-Both `ARG_START_DATE` and `END_DATE` have a `+ timedelta(hours=1)` applied regardless of input. This undocumented workaround silently shifts any date the caller provides.
+**Undocumented +1h offset in `config.py`** — both `ARG_START_DATE` and `END_DATE` have `+ timedelta(hours=1)` applied unconditionally, silently shifting any date the caller provides.
