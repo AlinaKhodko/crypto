@@ -3,7 +3,7 @@ name: Binance + MA Technicals
 on:
   schedule:
     # GitHub cron uses UTC. "*/60 * * * *" = hourly at minute 0.
-    - cron: "*/59 * * * *"
+    - cron: "*/58 * * * *"
   workflow_dispatch: {}
 
 # Prevent overlapping runs of this workflow
